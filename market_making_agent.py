@@ -69,3 +69,51 @@ def simulate_stock_price(S_t, config, rng):
 
     return S_t * math.exp(exp)
 
+def strategy(C, config):
+    hf = config["half_spread"]
+
+
+    bid = max(C - hf, 0.0)
+    ask = C + hf
+
+    return bid, ask
+
+def fill_simulator(C, bid, ask, config, rng):
+    dt = config["step_minutes"]
+    A = config["base_fill_rate"]
+    k = config["fill_sensitivity"]
+
+    distance_b = C - bid
+    distance_a = ask - C
+
+    lambda_b = A*math.exp(-k*distance_b)
+    lambda_a = A*math.exp(-k*distance_a)
+
+    p_bid = 1 - math.exp(-lambda_b*dt)
+    p_ask = 1 - math.exp(-lambda_a*dt)
+
+    bid_fill = rng.random() < p_bid
+    ask_fill = rng.random() < p_ask
+
+    return bid_fill, ask_fill
+
+def execute_order(cash, inventory, bid, ask, bid_fill, ask_fill, config):
+    size = config["quote_size"]
+    mult = config["contract_multiplier"]
+    lim = config["max_inventory"]
+    executed = []
+
+    if bid_fill and inventory + size <= lim and cash >= mult*size*bid:
+        cash -= mult*size*bid
+        inventory += size
+        executed.append({"side": "buy", "price": bid,"quantity": size})
+
+
+    if ask_fill and inventory - size >= -lim:
+        cash += mult*size*ask
+        inventory -= size
+        executed.append({"side": "sell", "price": ask, "quantity": size})
+
+
+    return cash, inventory, executed
+
