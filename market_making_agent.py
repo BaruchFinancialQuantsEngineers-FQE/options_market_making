@@ -4,6 +4,9 @@
 # In[ ]:
 
 
+import math
+from scipy.stats import norm
+
 config = {
     # Underlying stock
     "initial_stock_price": 100.0,
@@ -52,4 +55,17 @@ def black_scholes(S_t, K, tau, r, sig):
     FV_P = K * math.exp(-r*tau) * norm.cdf(-d_2) - S_t * norm.cdf(-d_1)
 
     return FV_C, FV_P
+
+def delta(option_0, option_f, stock_0, stock_f):
+    return (option_f - option_0)/(stock_f - stock_0)
+
+def simulate_stock_price(S_t, config, rng):
+    mu = config["annual_drift"] 
+    sig = config["annual_volatility"]
+    dt = config["step_minutes"] / (390 * config["trading_days_per_year"])
+    Z = rng.standard_normal()
+
+    exp = (mu - (sig**2 / 2)) * dt + sig * math.sqrt(dt) * Z
+
+    return S_t * math.exp(exp)
 
