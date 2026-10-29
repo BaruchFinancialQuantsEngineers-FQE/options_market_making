@@ -117,3 +117,27 @@ def execute_order(cash, inventory, bid, ask, bid_fill, ask_fill, config):
 
     return cash, inventory, executed
 
+def avellaneda_stoikov(time, S_t, C, inventory, tau, config):
+    k = config["fill_sensitivity"]
+    vol = config["annual_volatility"]
+    r = config["risk_free_rate"]
+    K = config["strike"]
+    gamma = config["as_gamma"]
+
+    d_1 = (math.log(S_t/K) + (r + vol**2/2)*tau) / (vol*math.sqrt(tau))
+    delta = norm.cdf(d_1)
+
+    sig = abs(delta) * S_t * vol
+
+    session_time = config["num_steps"] * config["step_minutes"]
+    remaining = max(session_time - time, 0.0)
+    H = remaining / (390*config["trading_days_per_year"])
+
+    r = C - inventory * gamma * sig**2 * H
+    s = gamma * sig**2 * H + (2/gamma) * math.log1p(gamma/k)
+
+    bid = max(r - s/2, 0.0)
+    ask = max(r + s/2, 0.0)
+
+    return bid, ask
+
