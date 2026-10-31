@@ -141,3 +141,89 @@ def avellaneda_stoikov(time, S_t, C, inventory, tau, config):
 
     return bid, ask
 
+def simulate_day(config):
+
+    # Market
+    stock_price = config["initial_stock_price"]
+    tau = config["time_to_expiry_years"]
+
+    # Account
+    cash = config["initial_cash"]
+    inventory = config["initial_inventory"]
+
+    # Records
+    history = []
+    trades = []
+
+    # Random shock
+    rng = np.random.default_rng(config["seed"])
+    mature_step = (config["step_minutes"]/390) / 365
+
+    initial_pv = cash
+
+    for step in range(config["num_steps"] + 1):
+        call, put = black_scholes(stock_price, config["strike"], tau, config["risk_free_rate"], config["annual_volatility"])
+        # bid, ask = strategy(call, config)
+        bid, ask = avellaneda_stoikov(step*config["step_minutes"], stock_price, call, inventory, tau, config)
+
+        pv = cash + config["contract_multiplier"] * inventory * call
+        pnl = pv - initial_pv
+
+
+        history.append({
+            "minute": step * config["step_minutes"],
+            "stock_price": stock_price,
+            "tau": tau,
+            "call_value": call,
+            "put_value": put,
+            "bid": bid,
+            "ask": ask,
+            "cash": cash,
+            "inventory": inventory,
+            "portfolio_value": pv,
+            "P&L": pnl,
+        })
+
+        if step == config["num_steps"]:
+            break
+
+        bid_fill, ask_fill = fill_simulator(call, bid, ask, config, rng)
+        cash, inventory, executed = execute_order(cash, inventory, bid, ask, bid_fill, ask_fill, config)
+
+        for trade in executed:
+            trade["minute"] = step * config["step_minutes"]
+            trades.append(trade)
+
+        stock_price = simulate_stock_price(stock_price, config, rng)
+        tau = max(tau - mature_step, 0.0)
+
+
+
+    return {
+        "history": history,
+        "trades": trades,
+        "Data": {
+            "PnL": history[-1]["P&L"],
+            "Inventory": inventory,
+            "Total Fills": len(trades),
+        },
+    }
+
+result = simulate_day(config)
+history = result["history"]
+trades = result["trades"]
+
+print(result["Data"])
+
+
+# In[1]:
+
+
+pwd
+
+
+# In[ ]:
+
+
+
+
