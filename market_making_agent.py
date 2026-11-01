@@ -215,6 +215,41 @@ trades = result["trades"]
 
 print(result["Data"])
 
+def plot_it():
+    minutes = [row["minute"] for row in history]
+
+    fig, axes = plt.subplots(3, 1, figsize=(10, 9), sharex=True)
+
+    for key, label in [
+        ("call_value", "Call value"),
+        ("bid", "Bid"),
+        ("ask", "Ask"),
+    ]:
+        axes[0].plot(
+            minutes, [row[key] for row in history], label=label
+        )
+
+    axes[0].set_ylabel("Price ($ per share)")
+    axes[0].legend()
+
+    axes[1].step(
+        minutes,
+        [row["inventory"] for row in history],
+        where="post",
+    )
+    axes[1].axhline(config["max_inventory"], color="red", linestyle="--")
+    axes[1].axhline(-config["max_inventory"], color="red", linestyle="--")
+    axes[1].set_ylabel("Inventory (contracts)")
+
+    axes[2].plot(minutes, [row["P&L"] for row in history])
+    axes[2].axhline(0, color="gray", linestyle="--")
+    axes[2].set_ylabel("P&L ($)")
+    axes[2].set_xlabel("Minutes since open")
+
+    plt.tight_layout()
+    plt.show()
+plot_it()
+
 
 # In[1]:
 
