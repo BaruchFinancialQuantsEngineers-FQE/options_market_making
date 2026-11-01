@@ -1,11 +1,14 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[ ]:
+# In[2]:
 
 
 import math
 from scipy.stats import norm
+import numpy as np
+import matplotlib.pyplot as plt
+
 
 config = {
     # Underlying stock
@@ -214,7 +217,6 @@ history = result["history"]
 trades = result["trades"]
 
 print(result["Data"])
-
 def plot_it():
     minutes = [row["minute"] for row in history]
 
@@ -249,16 +251,4 @@ def plot_it():
     plt.tight_layout()
     plt.show()
 plot_it()
-
-
-# In[1]:
-
-
-pwd
-
-
-# In[ ]:
-
-
-
 
