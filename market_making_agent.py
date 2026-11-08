@@ -42,6 +42,57 @@ config = {
     "seed": 42,
 }
 
+class InformedTraders:
+    def __init__(self, V, P):
+        # market value at end of day
+        self.V = V            
+
+        # current price
+        self.price = P
+
+    def _get_signal(self):
+        sig = 0.4
+        error = norm.rvs(loc=0, scale=0.4)
+        S = self.V + error
+
+        return S
+
+
+    def fill_order(self, bid, ask, beta, max_size=10):
+
+        # checks
+        if bid > ask:
+            raise ValueError("bid must be less than or equal to ask")
+        if beta < 0 or max_size < 1:
+            raise ValueError("beta must be nonnegative; max_size must be positive")
+
+        S = self._get_signal()
+
+
+        if S > ask:
+            position = "buy"
+            price = ask
+            edge = S - ask
+
+        elif S < bid:
+            position = "sell"
+            price = bid
+            edge = bid - S
+
+        else:
+            return None
+
+        quantity = min(int(beta * edge), max_size)
+
+        if quantity == 0:
+            return None
+        else:
+            return {
+                "position": position,
+                "price": price,
+                "quantity": quantity,
+            }
+
 def pnl(cash, mult, inventory, option_value, initial_cash):
     return (cash + mult*inventory*option_value) - initial_cash
 
@@ -143,6 +194,8 @@ def avellaneda_stoikov(time, S_t, C, inventory, tau, config):
     ask = max(r + s/2, 0.0)
 
     return bid, ask
+
+
 
 def simulate_day(config):
 
