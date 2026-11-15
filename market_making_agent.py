@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[2]:
+# In[12]:
 
 
 import math
@@ -39,7 +39,7 @@ config = {
 
     # informed traders parameters
     "arrival_rate": 0.05,
-    "signal": 0.4,
+    "signal": 0.2,
     "kyle_beta": 10.0,
     "max_size": 1,
 
@@ -200,13 +200,13 @@ def avellaneda_stoikov(time, S_t, C, inventory, tau, config):
 
     return bid, ask
 
-def execute_special_orders(cash, inventory, order, config):
+def execute_special_order(cash, inventory, order, config):
     if order is None:
         return cash, inventory, []
 
     mult = config["contract_multiplier"]
     limit = config["max_inventory"]
-    price = config["price"]
+    price = order["price"]
 
     quantity = min(order["quantity"], config["quote_size"])
 
@@ -264,7 +264,40 @@ def simulate_day(config):
     rng = np.random.default_rng(config["seed"])
     mature_step = (config["step_minutes"]/390) / 365
 
-    initial_pv = cash
+    stock_path = [stock_price]
+
+    for hingadingadergen in range(config["num_steps"]):
+        stock_path.append(
+            simulate_stock_price(stock_path[-1], config, rng)
+        )
+
+    terminal_tau = max(
+        tau - config["num_steps"] * mature_step,
+        0.0,
+    )
+
+    terminal_call, _ = black_scholes(
+        stock_path[-1],
+        config["strike"],
+        terminal_tau,
+        config["risk_free_rate"],
+        config["annual_volatility"],
+    )
+
+    informed = InformedTraders(
+        V=terminal_call,
+        sig=config["signal"],
+    )
+
+    initial_ov = black_scholes(
+        stock_price,
+        config["strike"],
+        tau,
+        config["risk_free_rate"],
+        config["annual_volatility"],
+    )[0]
+
+    initial_pv = (cash + config["contract_multiplier"] * inventory * initial_ov)
 
     for step in range(config["num_steps"] + 1):
         call, put = black_scholes(stock_price, config["strike"], tau, config["risk_free_rate"], config["annual_volatility"])
@@ -292,16 +325,50 @@ def simulate_day(config):
         if step == config["num_steps"]:
             break
 
-        bid_fill, ask_fill = fill_simulator(call, bid, ask, config, rng)
-        cash, inventory, executed = execute_order(cash, inventory, bid, ask, bid_fill, ask_fill, config)
+        bid_fill, ask_fill = fill_simulator(
+            call, bid, ask, config, rng
+        )
+
+        cash, inventory, executed = execute_order(
+            cash, inventory, bid, ask,
+            bid_fill, ask_fill, config
+        )
 
         for trade in executed:
             trade["minute"] = step * config["step_minutes"]
+            trade["source"] = "uninformed"
             trades.append(trade)
 
-        stock_price = simulate_stock_price(stock_price, config, rng)
+        # Informed traders: Poisson arrivals during this step
+        num_arrivals = rng.poisson(
+            config["arrival_rate"] * config["step_minutes"]
+        )
+
+        for arrival in range(num_arrivals):
+            order = informed.fill_order(
+                bid=bid,
+                ask=ask,
+                beta=config["kyle_beta"],
+                max_size=config["max_size"],
+            )
+
+            cash, inventory, executed = execute_special_order(
+                cash, inventory, order, config
+            )
+
+            for trade in executed:
+                trade["minute"] = step * config["step_minutes"]
+                trades.append(trade)
+
+        # Advance along the SAME path used to calculate terminal_call
+        stock_price = stock_path[step + 1]
         tau = max(tau - mature_step, 0.0)
 
+
+    informed_trades = [
+        trade for trade in trades
+        if trade["source"] == "informed"
+    ]
 
 
     return {
@@ -311,6 +378,7 @@ def simulate_day(config):
             "PnL": history[-1]["P&L"],
             "Inventory": inventory,
             "Total Fills": len(trades),
+            "Informed executions:": len(informed_trades),
         },
     }
 
@@ -353,4 +421,10 @@ def plot_it():
     plt.tight_layout()
     plt.show()
 plot_it()
+
+
+# In[ ]:
+
+
+
 
