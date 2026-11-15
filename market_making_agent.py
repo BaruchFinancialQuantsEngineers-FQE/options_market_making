@@ -37,18 +37,23 @@ config = {
     "base_fill_rate": 0.5,
     "fill_sensitivity": 5.0,
 
+    # informed traders parameters
+    "arrival_rate": 0.05,
+    "signal": 0.4,
+    "kyle_beta": 10.0,
+    "max_size": 1,
+
     # Other
     "risk-free rate": 0.0413,
     "seed": 42,
 }
 
 class InformedTraders:
-    def __init__(self, V, P):
+    def __init__(self, V, sig=0.4):
         # market value at end of day
-        self.V = V            
+        self.V = V 
+        self.sig = sig
 
-        # current price
-        self.price = P
 
     def _get_signal(self):
         sig = 0.4
@@ -195,9 +200,53 @@ def avellaneda_stoikov(time, S_t, C, inventory, tau, config):
 
     return bid, ask
 
+def execute_special_orders(cash, inventory, order, config):
+    if order is None:
+        return cash, inventory, []
+
+    mult = config["contract_multiplier"]
+    limit = config["max_inventory"]
+    price = config["price"]
+
+    quantity = min(order["quantity"], config["quote_size"])
+
+    if order["position"] == "buy":
+        quantity = min(quantity, limit + inventory)
+
+        if quantity <= 0:
+            return cash, inventory, []
+
+        cash += mult * quantity * price
+        inventory -= quantity
+        bot_side = "sell"
+
+    else:
+
+        quantity = min(quantity, limit - inventory)
+
+        if price > 0:
+            affordable = math.floor(cash / (mult * price))
+            quantity = min(quantity, affordable)
+
+        if quantity <= 0:
+            return cash, inventory, []
+
+        cash -= mult * quantity * price
+        inventory += quantity
+        bot_side = "buy"
+
+    executed = [{
+        "side": bot_side,
+        "price": price,
+        "quantity": quantity,
+        "source": "informed",
+    }]
+
+    return cash, inventory, executed
 
 
 def simulate_day(config):
+
 
     # Market
     stock_price = config["initial_stock_price"]
