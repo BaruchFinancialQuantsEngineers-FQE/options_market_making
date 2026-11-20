@@ -242,6 +242,30 @@ def execute_special_order(cash, inventory, order, config):
 
     return cash, inventory, executed
 
+def glosten_milgrom(P_vh, mu, v_h, v_l):
+    P_buy_vh = mu + (1-mu)*0.5
+    P_buy_vl = (1-mu)*0.5
+
+    num = P_buy_vh * P_vh
+    denom = num + P_buy_vl * (1-P_vh)
+    P_vh_buy = num / denom
+
+    p_b = P_vh_buy
+
+    ask = p_b*v_h + (1-p_b)*v_l
+
+    P_sell_vh = 1 - P_buy_vh
+    P_sell_vl = 1 - P_buy_vl
+
+    num_sell = P_sell_vh * P_vh
+    den_sell = num_sell + P_sell_vl * (1-P_vh)
+    P_vh_sell = num_sell/den_sell
+
+    p_s = P_vh_sell
+
+    bid = (1-p_s)*v_l + p_s*v_h
+
+    return bid, ask, P_vh_buy, P_vh_sell
 
 
 def simulate_day(config):
@@ -303,7 +327,7 @@ def simulate_day(config):
         call, put = black_scholes(stock_price, config["strike"], tau, config["risk_free_rate"], config["annual_volatility"])
         #bid, ask = strategy(call, config)
         #bid, ask = avellaneda_stoikov(step*config["step_minutes"], stock_price, call, inventory, tau, config)
-        #bid, ask, p_buy, p_sell = glosten_milgrom(P_vh, mu, v_h, v_l)
+        bid, ask, p_buy, p_sell = glosten_milgrom(P_vh, mu, v_h, v_l)
 
         pv = cash + config["contract_multiplier"] * inventory * call
         pnl = pv - initial_pv
