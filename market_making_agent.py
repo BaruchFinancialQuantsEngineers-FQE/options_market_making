@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[12]:
+# In[16]:
 
 
 import math
@@ -39,13 +39,12 @@ config = {
 
     # informed traders parameters
     "arrival_rate": 0.05,
-    "signal": 0.2,
+    "signal": 0.10,
     "kyle_beta": 10.0,
-    "max_size": 1,
+    "max_size": 1.0,
 
     # Other
     "risk-free rate": 0.0413,
-    "seed": 42,
 }
 
 class InformedTraders:
@@ -56,8 +55,7 @@ class InformedTraders:
 
 
     def _get_signal(self):
-        sig = 0.4
-        error = norm.rvs(loc=0, scale=0.4)
+        error = norm.rvs(loc=0, scale=self.sig)
         S = self.V + error
 
         return S
@@ -245,6 +243,7 @@ def execute_special_order(cash, inventory, order, config):
     return cash, inventory, executed
 
 
+
 def simulate_day(config):
 
 
@@ -261,7 +260,7 @@ def simulate_day(config):
     trades = []
 
     # Random shock
-    rng = np.random.default_rng(config["seed"])
+    rng = np.random.default_rng()
     mature_step = (config["step_minutes"]/390) / 365
 
     stock_path = [stock_price]
@@ -298,11 +297,13 @@ def simulate_day(config):
     )[0]
 
     initial_pv = (cash + config["contract_multiplier"] * inventory * initial_ov)
+    Pv_h = 0.5
 
     for step in range(config["num_steps"] + 1):
         call, put = black_scholes(stock_price, config["strike"], tau, config["risk_free_rate"], config["annual_volatility"])
-        # bid, ask = strategy(call, config)
-        bid, ask = avellaneda_stoikov(step*config["step_minutes"], stock_price, call, inventory, tau, config)
+        #bid, ask = strategy(call, config)
+        #bid, ask = avellaneda_stoikov(step*config["step_minutes"], stock_price, call, inventory, tau, config)
+        #bid, ask, p_buy, p_sell = glosten_milgrom(P_vh, mu, v_h, v_l)
 
         pv = cash + config["contract_multiplier"] * inventory * call
         pnl = pv - initial_pv
@@ -420,11 +421,18 @@ def plot_it():
 
     plt.tight_layout()
     plt.show()
+
+terminal_value = result["history"][-1]["call_value"]
+
+informed_markout = sum(
+    (terminal_value - trade["price"])
+    * (1 if trade["side"] == "buy" else -1)
+    * trade["quantity"]
+    * config["contract_multiplier"]
+    for trade in result["trades"]
+    if trade["source"] == "informed"
+)
+
+print(f"Bot terminal markout from informed trades: ${informed_markout:.2f}")
 plot_it()
-
-
-# In[ ]:
-
-
-
 
