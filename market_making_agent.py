@@ -267,6 +267,39 @@ def glosten_milgrom(P_vh, mu, v_h, v_l):
 
     return bid, ask, P_vh_buy, P_vh_sell
 
+def generate_customer_order(true_value, bid, ask, mu, rng):
+
+    if rng.random() < mu:
+        if true_value > ask:
+            return "buy"
+        elif true_value < bid:
+            return "sell"
+        return None
+
+    return rng.choice(["buy", "sell"])  
+
+def _get_terminal_values(n, stock_price, terminal_tau, config):
+
+    H = (config["num_steps"] * config["step_minutes"] / (390 * config["trading_days_per_year"]))
+
+    Z = rng.standard_normal(n)
+
+    possible_prices = stock_price * np.exp((config["annual_drift"] - 0.5 * config["annual_volatility"]**2) * H + config["annual_volatility"] * np.sqrt(H) * Z)
+
+    possible_values = np.array([
+        black_scholes(
+            s,
+            config["strike"],
+            terminal_tau,
+            config["risk_free_rate"],
+            config["annual_volatility"],
+        )[0]
+        for s in possible_prices
+    ])
+
+    probabilities = np.full(n, 1.0 / n)
+
+    return possible_values, probabilities
 
 def simulate_day(config):
 
@@ -321,13 +354,13 @@ def simulate_day(config):
     )[0]
 
     initial_pv = (cash + config["contract_multiplier"] * inventory * initial_ov)
-    Pv_h = 0.5
+
 
     for step in range(config["num_steps"] + 1):
         call, put = black_scholes(stock_price, config["strike"], tau, config["risk_free_rate"], config["annual_volatility"])
         #bid, ask = strategy(call, config)
         #bid, ask = avellaneda_stoikov(step*config["step_minutes"], stock_price, call, inventory, tau, config)
-        bid, ask, p_buy, p_sell = glosten_milgrom(P_vh, mu, v_h, v_l)
+
 
         pv = cash + config["contract_multiplier"] * inventory * call
         pnl = pv - initial_pv
@@ -341,6 +374,7 @@ def simulate_day(config):
             "put_value": put,
             "bid": bid,
             "ask": ask,
+            "spread": ask - bid,
             "cash": cash,
             "inventory": inventory,
             "portfolio_value": pv,
