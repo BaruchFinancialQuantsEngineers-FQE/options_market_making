@@ -38,13 +38,14 @@ config = {
     "fill_sensitivity": 5.0,
 
     # informed traders parameters
-    "arrival_rate": 0.05,
+    "arrival_rate": 0.05, #random.random(),
     "signal": 0.10,
     "kyle_beta": 10.0,
     "max_size": 1.0,
 
     # Other
     "risk-free rate": 0.0413,
+    "customer_arrival": 0.45, #random.random(),
 }
 
 class InformedTraders:
@@ -237,7 +238,6 @@ def execute_special_order(cash, inventory, order, config):
         "side": bot_side,
         "price": price,
         "quantity": quantity,
-        "source": "informed",
     }]
 
     return cash, inventory, executed
@@ -279,6 +279,10 @@ def generate_customer_order(true_value, bid, ask, mu, rng):
     return rng.choice(["buy", "sell"])  
 
 def _get_terminal_values(n, stock_price, terminal_tau, config):
+    """
+    initializes bot's initial beliefs for each terminal value of the option
+    each value is equal
+    """
 
     H = (config["num_steps"] * config["step_minutes"] / (390 * config["trading_days_per_year"]))
 
@@ -300,6 +304,54 @@ def _get_terminal_values(n, stock_price, terminal_tau, config):
     probabilities = np.full(n, 1.0 / n)
 
     return possible_values, probabilities
+
+def _get_likelihoods(possible_values, bid, ask, config):
+    """
+    gets likelihoods of the respective possible value in the possible values vector
+    """
+
+    beta = config["kyle_beta"]
+    signal = config["signal"]
+
+    if beta <= 0:
+        return (
+            np.zeros_like(possible_values),
+            np.zeros_like(possible_values),
+        )
+
+    buy_threshold = ask + 1 / beta
+    sell_threshold = bid - 1 / beta
+
+    if signal_std == 0:
+        p_buy = (possible_values >= buy_threshold).astype(float)
+        p_sell = (possible_values <= sell_threshold).astype(float)
+    else:
+        p_buy = norm.sf(
+            buy_threshold, loc=possible_values, scale=signal
+        )
+        p_sell = norm.cdf(
+            sell_threshold, loc=possible_values, scale=signal
+        )
+
+def arrival_types(rng, config):
+    informed = config["arrival_rate"]
+    uninformed = config["customer_arrival"]
+    steps = config["step_minutes"]
+
+    lmbda = informed + uninformed
+    informed_ratio = informed / lmbda
+
+    n_customers = rng.poisson(lam=lmbda*steps)
+
+    customers = []
+
+    for n in range(n_customers):
+        if rng.random() > informed_ratio:
+            customers.append("uninformed")
+        else:
+            customers.append("informed")
+
+    return customers
 
 def simulate_day(config):
 
@@ -358,8 +410,10 @@ def simulate_day(config):
 
     for step in range(config["num_steps"] + 1):
         call, put = black_scholes(stock_price, config["strike"], tau, config["risk_free_rate"], config["annual_volatility"])
-        #bid, ask = strategy(call, config)
+        bid, ask = strategy(call, config)
         #bid, ask = avellaneda_stoikov(step*config["step_minutes"], stock_price, call, inventory, tau, config)
+
+        p_buy, p_sell = _get_likelihoods(possible_values, bid, ask, config)
 
 
         pv = cash + config["contract_multiplier"] * inventory * call
@@ -384,42 +438,26 @@ def simulate_day(config):
         if step == config["num_steps"]:
             break
 
-        bid_fill, ask_fill = fill_simulator(
-            call, bid, ask, config, rng
-        )
+        customers = arrival_types(rng, config)
+        for customer in customers:
+            if customer is "uninformed":
+                if rng.random() <= 0.5:
+                    price = ask
+                    quantity = config["quote_size"]
+                    cash, inventory, executed = execute_order(cash, inventory, bid, ask, False, True, config)
+                else:
+                    price = bid
+                    quantity = config["quote_size"]
+                    cash, inventory, executed = execute_order(cash, inventory, bid, ask, True, False, config)
 
-        cash, inventory, executed = execute_order(
-            cash, inventory, bid, ask,
-            bid_fill, ask_fill, config
-        )
-
-        for trade in executed:
-            trade["minute"] = step * config["step_minutes"]
-            trade["source"] = "uninformed"
-            trades.append(trade)
-
-        # Informed traders: Poisson arrivals during this step
-        num_arrivals = rng.poisson(
-            config["arrival_rate"] * config["step_minutes"]
-        )
-
-        for arrival in range(num_arrivals):
-            order = informed.fill_order(
-                bid=bid,
-                ask=ask,
-                beta=config["kyle_beta"],
-                max_size=config["max_size"],
-            )
-
-            cash, inventory, executed = execute_special_order(
-                cash, inventory, order, config
-            )
-
+            else:
+                order = informed.fill_order(bid, ask, config["kyle_beta"], config["max_size"])
+                cash, inventory, executed = execute_special_order(cash inventory, order, config)
             for trade in executed:
                 trade["minute"] = step * config["step_minutes"]
+                trade["source"] = customer
                 trades.append(trade)
 
-        # Advance along the SAME path used to calculate terminal_call
         stock_price = stock_path[step + 1]
         tau = max(tau - mature_step, 0.0)
 
