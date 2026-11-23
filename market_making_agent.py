@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[16]:
+# In[2]:
 
 
 import math
@@ -305,7 +305,7 @@ def _get_terminal_values(n, stock_price, terminal_tau, config):
 
     return possible_values, probabilities
 
-def _get_likelihoods(possible_values, bid, ask, config):
+def _get_likelihoods(possible_values, bid, ask, mu, config):
     """
     gets likelihoods of the respective possible value in the possible values vector
     """
@@ -314,15 +314,13 @@ def _get_likelihoods(possible_values, bid, ask, config):
     signal = config["signal"]
 
     if beta <= 0:
-        return (
-            np.zeros_like(possible_values),
-            np.zeros_like(possible_values),
-        )
+        p_buy = np.zeros_like(possible_values, dtype=float)
+        p_sell = np.zeros_like(possible_values, dtype=float)
+    else:
+        buy_threshold = ask + 1 / beta
+        sell_threshold = bid - 1 / beta
 
-    buy_threshold = ask + 1 / beta
-    sell_threshold = bid - 1 / beta
-
-    if signal_std == 0:
+    if signal == 0:
         p_buy = (possible_values >= buy_threshold).astype(float)
         p_sell = (possible_values <= sell_threshold).astype(float)
     else:
@@ -332,6 +330,59 @@ def _get_likelihoods(possible_values, bid, ask, config):
         p_sell = norm.cdf(
             sell_threshold, loc=possible_values, scale=signal
         )
+
+    P_buy_v = mu*p_buy + (1-mu)*0.5
+    P_sell_v = mu*p_sell + (1-mu)*0.5
+
+    return P_buy_v, P_sell_v
+
+def _get_gm_quotes(possible_values, probabilities, P_buy_v, P_sell_v, config):
+    buy_probs = []
+    count = 0
+    for i in P_buy_v:
+        denom = 0
+        p_i = probabilities[count]
+
+        count_j = 0
+        for j in P_buy_v:
+            p_j = probabilities[count_j]
+            denom += p_j * j
+
+            count_j += 1
+        count += 1
+        p_buy = (p_i * i) / denom
+        buy_probs.append(p_buy)
+
+    ask = 0
+    for index in range(len(possible_values)):
+        v = possible_values[index]
+        buy_prob = buy_probs[index]
+
+        ask += v * buy_prob
+
+    sell_probs = []
+    coun = 0
+    for i in P_sell_v:
+        denom = 0
+        p_i = probabilities[coun]
+
+        coun_j = 0
+        for j in P_sell_v:
+            p_j = probabilities[coun_j]
+            denom += p_j * j
+
+            coun_j += 1
+        coun += 1
+        p_sell = (p_i * i) / denom
+        sell_probs.append(p_sell)
+
+    bid = 0
+    for index in range(len(possible_values)):
+        v = possible_values[index]
+        sell_prob = sell_probs[index]
+        bid += v * sell_prob
+
+    return bid, ask
 
 def arrival_types(rng, config):
     informed = config["arrival_rate"]
@@ -531,4 +582,16 @@ informed_markout = sum(
 
 print(f"Bot terminal markout from informed trades: ${informed_markout:.2f}")
 plot_it()
+
+
+# In[1]:
+
+
+_get_gm_quotes([4,6], [0.5, 0.5], [0.4, 0.6], [0.6, 0.4])
+
+
+# In[ ]:
+
+
+
 
