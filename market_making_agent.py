@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[2]:
+# In[7]:
 
 
 import math
@@ -46,6 +46,7 @@ config = {
     # Other
     "risk-free rate": 0.0413,
     "customer_arrival": 0.45, #random.random(),
+    "seed": 42,
 }
 
 class InformedTraders:
@@ -278,7 +279,7 @@ def generate_customer_order(true_value, bid, ask, mu, rng):
 
     return rng.choice(["buy", "sell"])  
 
-def _get_terminal_values(n, stock_price, terminal_tau, config):
+def _get_terminal_values(n, stock_price, terminal_tau, rng, config):
     """
     initializes bot's initial beliefs for each terminal value of the option
     each value is equal
@@ -410,6 +411,7 @@ def simulate_day(config):
     # Market
     stock_price = config["initial_stock_price"]
     tau = config["time_to_expiry_years"]
+    mu = config["mu"]
 
     # Account
     cash = config["initial_cash"]
@@ -420,7 +422,7 @@ def simulate_day(config):
     trades = []
 
     # Random shock
-    rng = np.random.default_rng()
+    rng = np.random.default_rng(seed=config["seed"])
     mature_step = (config["step_minutes"]/390) / 365
 
     stock_path = [stock_price]
@@ -434,6 +436,8 @@ def simulate_day(config):
         tau - config["num_steps"] * mature_step,
         0.0,
     )
+
+    mu = config["arrival_rate"] / (config["arrival_rate"] + config["customer_arrival"])
 
     terminal_call, _ = black_scholes(
         stock_path[-1],
@@ -458,13 +462,15 @@ def simulate_day(config):
 
     initial_pv = (cash + config["contract_multiplier"] * inventory * initial_ov)
 
+    possible_values, probabilities = _get_terminal_values(100, stock_price, terminal_tau, rng, config)
+
 
     for step in range(config["num_steps"] + 1):
         call, put = black_scholes(stock_price, config["strike"], tau, config["risk_free_rate"], config["annual_volatility"])
         bid, ask = strategy(call, config)
         #bid, ask = avellaneda_stoikov(step*config["step_minutes"], stock_price, call, inventory, tau, config)
 
-        p_buy, p_sell = _get_likelihoods(possible_values, bid, ask, config)
+        p_buy, p_sell = _get_likelihoods(possible_values, bid, ask, mu, config)
 
 
         pv = cash + config["contract_multiplier"] * inventory * call
@@ -491,7 +497,7 @@ def simulate_day(config):
 
         customers = arrival_types(rng, config)
         for customer in customers:
-            if customer is "uninformed":
+            if customer == "uninformed":
                 if rng.random() <= 0.5:
                     price = ask
                     quantity = config["quote_size"]
@@ -503,7 +509,7 @@ def simulate_day(config):
 
             else:
                 order = informed.fill_order(bid, ask, config["kyle_beta"], config["max_size"])
-                cash, inventory, executed = execute_special_order(cash inventory, order, config)
+                cash, inventory, executed = execute_special_order(cash, inventory, order, config)
             for trade in executed:
                 trade["minute"] = step * config["step_minutes"]
                 trade["source"] = customer
@@ -584,10 +590,15 @@ print(f"Bot terminal markout from informed trades: ${informed_markout:.2f}")
 plot_it()
 
 
-# In[1]:
+# In[11]:
 
 
-_get_gm_quotes([4,6], [0.5, 0.5], [0.4, 0.6], [0.6, 0.4])
+possible_values = [4.0, 6.0]
+probabilities = [0.5, 0.5]
+mu = 0.20
+
+buy, sell = _get_likelihoods(possible_values, bid, ask, mu, config)
+_get_gm_quotes(possible_values, probabilities, buy, sell, config)
 
 
 # In[ ]:
