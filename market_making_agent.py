@@ -310,11 +310,22 @@ def _get_likelihoods(possible_values, bid, ask, mu, config):
     """
     gets likelihoods of the respective possible value in the possible values vector
     """
+    possible_values = np.asarray(possible_values, dtype=float)
 
     beta = config["kyle_beta"]
     signal = config["signal"]
 
-    if beta <= 0:
+    if not 0 <= mu <= 1:
+        raise ValueError("mu must be between 0 and 1")
+
+    if bid > ask:
+        raise ValueError("bid cannot exceed ask")
+
+    if beta < 0 or signal < 0:
+        raise ValueError("beta and signal must be nonnegative")   
+
+
+    if beta == 0:
         p_buy = np.zeros_like(possible_values, dtype=float)
         p_sell = np.zeros_like(possible_values, dtype=float)
     else:
@@ -337,53 +348,28 @@ def _get_likelihoods(possible_values, bid, ask, mu, config):
 
     return P_buy_v, P_sell_v
 
-def _get_gm_quotes(possible_values, probabilities, P_buy_v, P_sell_v, config):
-    buy_probs = []
-    count = 0
-    for i in P_buy_v:
-        denom = 0
-        p_i = probabilities[count]
+def _get_gm_quotes(possible_values, probabilities,
+                   P_buy_v, P_sell_v, config):
 
-        count_j = 0
-        for j in P_buy_v:
-            p_j = probabilities[count_j]
-            denom += p_j * j
+    possible_values = np.asarray(possible_values)
+    probabilities = np.asarray(probabilities)
 
-            count_j += 1
-        count += 1
-        p_buy = (p_i * i) / denom
-        buy_probs.append(p_buy)
+    buy_weights = probabilities * P_buy_v
+    sell_weights = probabilities * P_sell_v
 
-    ask = 0
-    for index in range(len(possible_values)):
-        v = possible_values[index]
-        buy_prob = buy_probs[index]
+    buy_denom = np.sum(buy_weights)
+    sell_denom = np.sum(sell_weights)
 
-        ask += v * buy_prob
+    if buy_denom <= 0 or sell_denom <= 0:
+        raise ValueError("Cannot condition on an impossible event")
 
-    sell_probs = []
-    coun = 0
-    for i in P_sell_v:
-        denom = 0
-        p_i = probabilities[coun]
+    buy_probs = buy_weights / buy_denom
+    sell_probs = sell_weights / sell_denom
 
-        coun_j = 0
-        for j in P_sell_v:
-            p_j = probabilities[coun_j]
-            denom += p_j * j
+    ask = np.dot(possible_values, buy_probs)
+    bid = np.dot(possible_values, sell_probs)
 
-            coun_j += 1
-        coun += 1
-        p_sell = (p_i * i) / denom
-        sell_probs.append(p_sell)
-
-    bid = 0
-    for index in range(len(possible_values)):
-        v = possible_values[index]
-        sell_prob = sell_probs[index]
-        bid += v * sell_prob
-
-    return bid, ask
+    return bid, ask, buy_probs, sell_probs
 
 def arrival_types(rng, config):
     informed = config["arrival_rate"]
