@@ -1,11 +1,12 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[3]:
+# In[1]:
 
 
 import math
 from scipy.stats import norm
+from scipy.special import logsumexp
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -305,7 +306,7 @@ def _get_terminal_values(n, stock_price, terminal_tau, rng, config):
 
     probabilities = np.full(n, 1.0 / n)
 
-    return possible_values, probabilities
+    return possible_prices, possible_values, probabilities
 
 def _get_likelihoods(possible_values, bid, ask, mu, config):
     """
@@ -392,6 +393,30 @@ def arrival_types(rng, config):
 
     return customers
 
+def _get_public_likelihoods(possible_prices, stock_price, step, config):
+
+    drift = config["annual_drift"]
+    vol = config["annual_volatility"]
+
+    remaining_steps = config["num_steps"] - step
+
+    H = (remaining_steps * config["step_minutes"] / (390 * config["trading_days_per_year"]))
+
+    if H <= 0:
+        raise ValueError("Trading session has ended")
+
+    mean = (math.log(stock_price) + (drift - 0.5 * vol**2) * H)
+
+    std = vol * math.sqrt(H)
+
+    log_likelihoods = norm.logpdf(
+        np.log(possible_prices),
+        loc=mean,
+        scale=std
+    )
+
+    return log_likelihoods
+
 def update_beliefs(probabilities, likelihood):
 
     weights = probabilities * likelihood
@@ -401,6 +426,21 @@ def update_beliefs(probabilities, likelihood):
         raise ValueError("Observed an impossible event")
 
     return weights / denom
+
+
+def _update_public_beliefs(probabilities, old_likelihoods, new_likelihoods):
+
+    with np.errstate(divide="ignore"):
+        log_probs = np.log(probabilities)
+
+    log_weights = (log_probs + new_likelihoods - old_likelihoods)
+
+    log_weights -= logsumexp(log_weights)
+
+    new_probabilities = np.exp(log_weights)
+
+    return new_probabilities
+
 
 def simulate_day(config):
 
@@ -419,7 +459,7 @@ def simulate_day(config):
     trades = []
 
     # Random shock
-    rng = np.random.default_rng(seed=config["seed"])
+    rng = np.random.default_rng()
     mature_step = (config["step_minutes"]/390) / 365
 
     stock_path = [stock_price]
@@ -458,14 +498,39 @@ def simulate_day(config):
         config["annual_volatility"],
     )[0]
 
+    possible_prices, possible_values, probabilities = _get_terminal_values(5000, stock_price, terminal_tau, rng, config)
+
+    old_likelihoods = _get_public_likelihoods(
+        possible_prices,
+        stock_price,
+        0,
+        config
+    )
+
     initial_pv = (cash + config["contract_multiplier"] * inventory * initial_ov)
 
-    possible_values, probabilities = _get_terminal_values(100, stock_price, terminal_tau, rng, config)
     bid, ask = strategy(initial_ov, config)
 
     for step in range(config["num_steps"] + 1):
         call, put = black_scholes(stock_price, config["strike"], tau, config["risk_free_rate"], config["annual_volatility"])
-        #bid, ask = strategy(call, config)
+
+        if 0 < step < config["num_steps"]:
+
+            new_likelihoods = _get_public_likelihoods(
+                possible_prices,
+                stock_price,
+                step,
+                config
+            )
+
+            probabilities = _update_public_beliefs(
+                probabilities,
+                old_likelihoods,
+                new_likelihoods
+            )
+
+            old_likelihoods = new_likelihoods
+
         #bid, ask = avellaneda_stoikov(step*config["step_minutes"], stock_price, call, inventory, tau, config)
 
         p_buy, p_sell = _get_likelihoods(possible_values, bid, ask, mu, config)
@@ -594,4 +659,10 @@ informed_markout = sum(
 
 print(f"Bot terminal markout from informed trades: ${informed_markout:.2f}")
 plot_it()
+
+
+# In[ ]:
+
+
+
 
