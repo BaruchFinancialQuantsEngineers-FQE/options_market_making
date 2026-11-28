@@ -1,12 +1,13 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[1]:
+# In[15]:
 
 
 import math
 from scipy.stats import norm
 from scipy.special import logsumexp
+from scipy.optimize import brentq
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -39,6 +40,7 @@ config = {
     "fill_sensitivity": 5.0,
 
     # informed traders parameters
+    "uninformed_sensitivity": 5.0,
     "arrival_rate": 0.05, #random.random(),
     "signal": 0.10,
     "kyle_beta": 10.0,
@@ -308,11 +310,11 @@ def _get_terminal_values(n, stock_price, terminal_tau, rng, config):
 
     return possible_prices, possible_values, probabilities
 
-def _get_likelihoods(possible_values, bid, ask, mu, config):
-    """
-    gets likelihoods of the respective possible value in the possible values vector
-    """
-    possible_values = np.asarray(possible_values, dtype=float)
+def _get_likelihoods(possible_values, bid, ask, mu, C, config):
+
+    possible_values = np.asarray(
+        possible_values, dtype=float
+    )
 
     beta = config["kyle_beta"]
     signal = config["signal"]
@@ -324,31 +326,59 @@ def _get_likelihoods(possible_values, bid, ask, mu, config):
         raise ValueError("bid cannot exceed ask")
 
     if beta < 0 or signal < 0:
-        raise ValueError("beta and signal must be nonnegative")   
-
+        raise ValueError("Invalid beta or signal")
 
     if beta == 0:
-        p_buy = np.zeros_like(possible_values, dtype=float)
-        p_sell = np.zeros_like(possible_values, dtype=float)
+        p_buy = np.zeros_like(possible_values)
+        p_sell = np.zeros_like(possible_values)
+
     else:
         buy_threshold = ask + 1 / beta
         sell_threshold = bid - 1 / beta
 
-    if signal == 0:
-        p_buy = (possible_values >= buy_threshold).astype(float)
-        p_sell = (possible_values <= sell_threshold).astype(float)
-    else:
-        p_buy = norm.sf(
-            buy_threshold, loc=possible_values, scale=signal
-        )
-        p_sell = norm.cdf(
-            sell_threshold, loc=possible_values, scale=signal
-        )
+        if signal == 0:
+            p_buy = (
+                possible_values >= buy_threshold
+            ).astype(float)
 
-    P_buy_v = mu*p_buy + (1-mu)*0.5
-    P_sell_v = mu*p_sell + (1-mu)*0.5
+            p_sell = (
+                possible_values <= sell_threshold
+            ).astype(float)
+
+        else:
+            p_buy = norm.sf(
+                buy_threshold,
+                loc=possible_values,
+                scale=signal
+            )
+
+            p_sell = norm.cdf(
+                sell_threshold,
+                loc=possible_values,
+                scale=signal
+            )
+
+    u_buy, u_sell, u_none = (_get_uninformed_likelihoods(bid, ask, C, config))
+
+    P_buy_v = mu*p_buy + (1-mu)*u_buy
+
+    P_sell_v = mu*p_sell + (1-mu)*u_sell
 
     return P_buy_v, P_sell_v
+
+def _get_uninformed_likelihoods(bid, ask, C, config):
+
+    k = config["uninformed_sensitivity"]
+
+    distance_buy = max(ask - C, 0.0)
+    distance_sell = max(C - bid, 0.0)
+
+    p_buy = 0.5 * np.exp(-k * distance_buy)
+    p_sell = 0.5 * np.exp(-k * distance_sell)
+
+    p_none = max(1 - p_buy - p_sell, 0.0)
+
+    return p_buy, p_sell, p_none
 
 def _get_gm_quotes(possible_values, probabilities,
                    P_buy_v, P_sell_v, config):
@@ -372,6 +402,63 @@ def _get_gm_quotes(possible_values, probabilities,
     bid = np.dot(possible_values, sell_probs)
 
     return bid, ask, buy_probs, sell_probs
+
+def solve_gm_quotes(
+    possible_values, probabilities,
+    bid, ask, mu, C, config,
+    tol=1e-6, max_iter=100
+):
+
+    values = np.asarray(possible_values)
+    probs = np.asarray(probabilities)
+
+    fair_value = np.dot(values, probs)
+
+    lower = float(np.min(values))
+    upper = float(np.max(values))
+
+    if upper - lower < tol:
+        return fair_value, fair_value
+
+    # Ask pricing equation
+    def ask_equation(a):
+
+        p_buy, _ = _get_likelihoods(
+            values, lower, a, mu, C, config
+        )
+
+        weights = probs * p_buy
+
+        return np.dot(weights, values - a)
+
+    # Bid pricing equation
+    def bid_equation(b):
+
+        _, p_sell = _get_likelihoods(
+            values, b, upper, mu, C, config
+        )
+
+        weights = probs * p_sell
+
+        return np.dot(weights, values - b)
+
+    new_ask = brentq(
+        ask_equation,
+        fair_value,
+        upper,
+        xtol=tol,
+        maxiter=max_iter
+    )
+
+    new_bid = brentq(
+        bid_equation,
+        lower,
+        fair_value,
+        xtol=tol,
+        maxiter=max_iter
+    )
+
+    return new_bid, new_ask
 
 def arrival_types(rng, config):
     informed = config["arrival_rate"]
@@ -441,7 +528,21 @@ def _update_public_beliefs(probabilities, old_likelihoods, new_likelihoods):
 
     return new_probabilities
 
+def _get_combined_beliefs(log_prior, log_order_flow, initial_likelihoods, current_likelihoods):
 
+    log_weights = (
+        log_prior
+        + log_order_flow
+        + current_likelihoods
+        - initial_likelihoods
+    )
+
+    normalizer = logsumexp(log_weights)
+
+    if not np.isfinite(normalizer):
+        raise ValueError("All particle weights vanished")
+
+    return np.exp(log_weights - normalizer)    
 def simulate_day(config):
 
 
@@ -459,14 +560,24 @@ def simulate_day(config):
     trades = []
 
     # Random shock
-    rng = np.random.default_rng()
+    seed_sequence = np.random.SeedSequence(
+        config["seed"]
+    )
+
+    seeds = seed_sequence.spawn(4)
+
+    stock_rng = np.random.default_rng(seeds[0])
+    particle_rng = np.random.default_rng(seeds[1])
+    arrival_rng = np.random.default_rng(seeds[2])
+    signal_rng = np.random.default_rng(seeds[3])
+
     mature_step = (config["step_minutes"]/390) / 365
 
     stock_path = [stock_price]
 
     for hingadingadergen in range(config["num_steps"]):
         stock_path.append(
-            simulate_stock_price(stock_path[-1], config, rng)
+            simulate_stock_price(stock_path[-1], config, stock_rng)
         )
 
     terminal_tau = max(
@@ -486,7 +597,7 @@ def simulate_day(config):
 
     informed = InformedTraders(
         V=terminal_call,
-        rng=rng,
+        rng=signal_rng,
         sig=config["signal"],
     )
 
@@ -498,7 +609,7 @@ def simulate_day(config):
         config["annual_volatility"],
     )[0]
 
-    possible_prices, possible_values, probabilities = _get_terminal_values(5000, stock_price, terminal_tau, rng, config)
+    possible_prices, possible_values, probabilities = _get_terminal_values(5000, stock_price, terminal_tau, particle_rng, config)
 
     old_likelihoods = _get_public_likelihoods(
         possible_prices,
@@ -506,7 +617,10 @@ def simulate_day(config):
         0,
         config
     )
+    initial_likelihoods = old_likelihoods.copy()
+    log_prior = np.log(probabilities)
 
+    log_order_flow = np.zeros_like(possible_values, dtype=float)
     initial_pv = (cash + config["contract_multiplier"] * inventory * initial_ov)
 
     bid, ask = strategy(initial_ov, config)
@@ -514,7 +628,7 @@ def simulate_day(config):
     for step in range(config["num_steps"] + 1):
         call, put = black_scholes(stock_price, config["strike"], tau, config["risk_free_rate"], config["annual_volatility"])
 
-        if 0 < step < config["num_steps"]:
+        if step < config["num_steps"]:
 
             new_likelihoods = _get_public_likelihoods(
                 possible_prices,
@@ -523,24 +637,57 @@ def simulate_day(config):
                 config
             )
 
-            probabilities = _update_public_beliefs(
-                probabilities,
-                old_likelihoods,
+            probabilities = _get_combined_beliefs(
+                log_prior,
+                log_order_flow,
+                initial_likelihoods,
                 new_likelihoods
             )
 
+
             old_likelihoods = new_likelihoods
 
+            public_probs = _update_public_beliefs(
+                np.full(
+                    len(possible_values),
+                    1 / len(possible_values)
+                ),
+                initial_likelihoods,
+                old_likelihoods
+            )
+
+            public_fair_value = np.dot(
+                possible_values, public_probs
+            )
+
+            gm_fair_value = np.dot(
+                possible_values, probabilities
+            )
+
+        else:
+            public_fair_value = call
+            gm_fair_value = call
         #bid, ask = avellaneda_stoikov(step*config["step_minutes"], stock_price, call, inventory, tau, config)
 
-        p_buy, p_sell = _get_likelihoods(possible_values, bid, ask, mu, config)
-        bid, ask, buy_probs, sell_probs = _get_gm_quotes(possible_values, probabilities, p_buy, p_sell, config)
+        if step < config["num_steps"]:
+
+            bid, ask = solve_gm_quotes(
+                possible_values, probabilities,
+                bid, ask, mu, call, config
+            )
+
+        else:
+            bid, ask = call, call
 
         pv = cash + config["contract_multiplier"] * inventory * call
         pnl = pv - initial_pv
 
 
         history.append({
+            "gm_fair_value": gm_fair_value,
+            "public_fair_value": public_fair_value,
+            "ess": 1 / np.sum(probabilities**2),
+            "belief_variance": np.dot(probabilities, (possible_values - np.dot(possible_values, probabilities))**2),
             "minute": step * config["step_minutes"],
             "stock_price": stock_price,
             "tau": tau,
@@ -558,33 +705,107 @@ def simulate_day(config):
         if step == config["num_steps"]:
             break
 
-        customers = arrival_types(rng, config)
+        customers = arrival_types(arrival_rng, config)
+
         for customer in customers:
+
+            # 1. Calculate likelihoods at actual quotes
+            p_buy, p_sell = _get_likelihoods(
+                possible_values, bid, ask, mu, call, config
+            )
+
+            p_none = np.clip(
+                1 - p_buy - p_sell, 0, 1
+            )
+
+            # 2. Generate customer decision
             if customer == "uninformed":
-                if rng.random() <= 0.5:
-                    price = ask
-                    quantity = config["quote_size"]
-                    cash, inventory, executed = execute_order(cash, inventory, bid, ask, False, True, config)
+
+                u_buy, u_sell, u_none = (
+                    _get_uninformed_likelihoods(
+                        bid, ask, call, config
+                    )
+                )
+
+                U = arrival_rng.random()
+
+                if U < u_buy:
+                    customer_action = "buy"
+
+                elif U < u_buy + u_sell:
+                    customer_action = "sell"
+
                 else:
-                    price = bid
-                    quantity = config["quote_size"]
-                    cash, inventory, executed = execute_order(cash, inventory, bid, ask, True, False, config)
+                    customer_action = None
+
+                if customer_action is None:
+                    order = None
+
+                else:
+                    order = {
+                        "position": customer_action,
+                        "price": (
+                            ask if customer_action == "buy"
+                            else bid
+                        ),
+                        "quantity": config["quote_size"]
+                    }
 
             else:
-                order = informed.fill_order(bid, ask, config["kyle_beta"], config["max_size"])
-                cash, inventory, executed = execute_special_order(cash, inventory, order, config)
+
+                order = informed.fill_order(
+                    bid,
+                    ask,
+                    config["kyle_beta"],
+                    config["max_size"]
+                )
+
+                customer_action = (
+                    None if order is None
+                    else order["position"]
+                )
+
+            # 3. Update beliefs from customer decision
+            if customer_action == "buy":
+                likelihood = p_buy
+
+            elif customer_action == "sell":
+                likelihood = p_sell
+
+            else:
+                likelihood = p_none
+
+            with np.errstate(divide="ignore"):
+                log_order_flow += np.log(likelihood)
+
+            probabilities = _get_combined_beliefs(
+                log_prior,
+                log_order_flow,
+                initial_likelihoods,
+                old_likelihoods
+            )
+
+            # 4. Execute at the original quoted price
+            cash, inventory, executed = execute_special_order(
+                cash, inventory, order, config
+            )
+
+            # 5. Record executed trades
             for trade in executed:
-                p_buy, p_sell = _get_likelihoods(possible_values, bid, ask, mu, config)
 
-                if trade["side"] == "sell":
-                    probabilities = update_beliefs(probabilities, p_buy)
+                trade["minute"] = (
+                    step * config["step_minutes"]
+                )
 
-                elif trade["side"] == "buy":
-                    probabilities = update_beliefs(probabilities, p_sell)
-
-                trade["minute"] = step * config["step_minutes"]
                 trade["source"] = customer
+
                 trades.append(trade)
+
+            # 6. Reprice before the next customer
+            bid, ask = solve_gm_quotes(
+                possible_values, probabilities,
+                bid, ask, mu, call, config
+            )
 
         stock_price = stock_path[step + 1]
         tau = max(tau - mature_step, 0.0)
@@ -659,10 +880,4 @@ informed_markout = sum(
 
 print(f"Bot terminal markout from informed trades: ${informed_markout:.2f}")
 plot_it()
-
-
-# In[ ]:
-
-
-
 
